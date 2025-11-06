@@ -4,14 +4,24 @@ use crate::shell::plan::{ExecCommand, ExecPipeline};
 
 pub fn expand_and_plan(ast: AstNode, env: &ShellEnv) -> ExecPipeline {
     match ast {
-        AstNode::Command(cmd) => ExecPipeline {
-            // single command → single ExecCommand
-            commands: vec![expand_command(&cmd, env)],
-        },
-        AstNode::Pipeline(cmds) => ExecPipeline {
-            // many commands → map each CommandNode → ExecCommand
-            commands: cmds.iter().map(|c| expand_command(c, env)).collect(),
-        },
+        AstNode::Command(cmd) => {
+            let ec = expand_command(&cmd, env);
+            if ec.program.is_empty() {
+                ExecPipeline { commands: vec![] }
+            } else {
+                ExecPipeline { commands: vec![ec] }
+            }
+        }
+        AstNode::Pipeline(cmds) => {
+            let mut out = Vec::new();
+            for c in cmds.iter() {
+                let ec = expand_command(c, env);
+                if !ec.program.is_empty() {
+                    out.push(ec);
+                }
+            }
+            ExecPipeline { commands: out }
+        }
     }
 }
 
@@ -30,11 +40,28 @@ fn expand_command(cmd: &CommandNode, env: &ShellEnv) -> ExecCommand {
     }
 }
 
-// if the whole word is "$FOO" → expand, else keep
+// expand $VAR anywhere in the word
 fn expand_word(word: &str, env: &ShellEnv) -> String {
-    if let Some(name) = word.strip_prefix('$') {
-        env.get_var(name).unwrap_or_default()
-    } else {
-        word.to_string()
+    let mut out = String::new();
+    let mut chars = word.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '$' {
+            let mut name = String::new();
+            while let Some(&ch) = chars.peek() {
+                if ch == '_' || ch.is_ascii_alphanumeric() {
+                    name.push(ch);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            let val = env.get_var(&name).unwrap_or_default();
+            out.push_str(&val);
+        } else {
+            out.push(c);
+        }
     }
+
+    out
 }

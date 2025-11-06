@@ -2,34 +2,48 @@ use crate::shell::plan::{ExecCommand, ExecPipeline};
 use crate::shell::{builtins, env::ShellEnv};
 
 pub fn execute_pipeline(pipe: &ExecPipeline, env: &mut ShellEnv) {
+    if pipe.commands.is_empty() {
+        return;
+    }
+
     if pipe.commands.len() == 1 {
-        // single command
         execute_command(&pipe.commands[0], env);
         return;
     }
 
-    // multiple commands
+    // TODO: real pipes; for now run sequentially
     for cmd in &pipe.commands {
         execute_command(cmd, env);
     }
 }
 
 fn execute_command(cmd: &ExecCommand, env: &mut ShellEnv) {
-    // builtins
-    if builtins::is_builtin(&cmd.program) {
-        let status = builtins::run_builtin(&cmd.program, &cmd.args, env);
+    let prog = cmd.program.trim();
+    if prog.is_empty() {
+        // don't yell, just ignore
+        env.last_status = 0;
+        return;
+    }
+
+    // builtins first
+    if builtins::is_builtin(prog) {
+        let status = builtins::run_builtin(prog, &cmd.args, env);
         env.last_status = status;
         return;
     }
 
-    // external process
-    let mut child = match std::process::Command::new(&cmd.program)
-        .args(&cmd.args)
-        .spawn()
-    {
+    // external
+    let mut child = match std::process::Command::new(prog).args(&cmd.args).spawn() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("{}: {e}", cmd.program);
+            match e.kind() {
+                std::io::ErrorKind::NotFound => {
+                    eprintln!("daosh: command not found: {}", prog);
+                }
+                _ => {
+                    eprintln!("daosh: failed to execute '{}': {}", prog, e);
+                }
+            }
             env.last_status = 127;
             return;
         }
@@ -40,7 +54,20 @@ fn execute_command(cmd: &ExecCommand, env: &mut ShellEnv) {
             env.last_status = status.code().unwrap_or(1);
         }
         Err(e) => {
-            eprintln!("failed to wait: {e}");
+            use std::io::ErrorKind;
+
+            match e.kind() {
+                ErrorKind::BrokenPipe => {
+                    eprintln!("daosh: broken pipe while waiting for '{}'", cmd.program);
+                }
+                ErrorKind::TimedOut => {
+                    eprintln!("daosh: process '{}' timed out", cmd.program);
+                }
+                _ => {
+                    eprintln!("daosh: failed to wait for '{}': {}", cmd.program, e);
+                }
+            }
+
             env.last_status = 1;
         }
     }

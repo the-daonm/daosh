@@ -1,3 +1,5 @@
+use crate::shell::lexer::{Token, lex};
+
 pub enum AstNode {
     Command(CommandNode),
     Pipeline(Vec<CommandNode>),
@@ -8,40 +10,57 @@ pub struct CommandNode {
     pub args: Vec<String>,
 }
 
-impl CommandNode {
-    pub fn new(name: String, args: Vec<String>) -> Self {
-        Self { name, args }
-    }
-}
-
 pub fn parse_line(line: &str) -> Result<AstNode, String> {
-    // split by | first (pipeline)
-    let parts: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
-    if parts.is_empty() {
+    let tokens = lex(line);
+    let mut commands: Vec<CommandNode> = Vec::new();
+    let mut current_words: Vec<String> = Vec::new();
+
+    for tok in tokens {
+        match tok {
+            Token::Word(w) => {
+                if !w.trim().is_empty() {
+                    current_words.push(w);
+                }
+            }
+            Token::Pipe => {
+                if let Some(cmd) = words_to_command(&current_words) {
+                    commands.push(cmd);
+                }
+                current_words.clear();
+            }
+            _ => {
+                // ignore redirs for now
+            }
+        }
+    }
+
+    if let Some(cmd) = words_to_command(&current_words) {
+        commands.push(cmd);
+    }
+
+    if commands.is_empty() {
+        // no real command
         return Err("empty command".into());
     }
 
-    if parts.len() == 1 {
-        // single command
-        let cmd = parse_command(parts[0])?;
-        Ok(AstNode::Command(cmd))
+    if commands.len() == 1 {
+        Ok(AstNode::Command(commands.remove(0)))
     } else {
-        // multiple commands → pipeline
-        let mut cmds = Vec::new();
-        for p in parts {
-            let c = parse_command(p)?;
-            cmds.push(c);
-        }
-        Ok(AstNode::Pipeline(cmds))
+        Ok(AstNode::Pipeline(commands))
     }
 }
 
-fn parse_command(s: &str) -> Result<CommandNode, String> {
-    let tokens: Vec<&str> = s.split_whitespace().collect();
-    if tokens.is_empty() {
-        return Err("empty command segment".into());
+fn words_to_command(words: &[String]) -> Option<CommandNode> {
+    if words.is_empty() {
+        return None;
     }
-    let name = tokens[0].to_string();
-    let args = tokens[1..].iter().map(|t| t.to_string()).collect();
-    Ok(CommandNode::new(name, args))
+    let name = words[0].trim();
+    if name.is_empty() {
+        return None;
+    }
+    let args = words[1..].to_vec();
+    Some(CommandNode {
+        name: name.to_string(),
+        args,
+    })
 }
